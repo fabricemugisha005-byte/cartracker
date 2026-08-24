@@ -13,7 +13,14 @@ app.use(express.json());
 
 // --- CONFIGURATION ---
 const JWT_SECRET = process.env.JWT_SECRET || 'mindshare_super_secret_key_2024';
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+
+if (!GOOGLE_CLIENT_ID) {
+  console.error('❌ GOOGLE_CLIENT_ID is missing from .env');
+  process.exit(1);
+}
+
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // Connect to MongoDB (Smart fallback: uses .env if available, otherwise local)
@@ -91,21 +98,109 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+// --- GOOGLE AUTH ROUTE ---
 app.post('/api/auth/google', async (req, res) => {
   try {
-    const ticket = await googleClient.verifyIdToken({ idToken: req.body.credential, audience: GOOGLE_CLIENT_ID });
-    const { sub, email, name, picture } = ticket.getPayload();
-    let user = await User.findOne({ email });
-    if (!user) {
-      user = await User.create({ name, email, googleId: sub, profileImage: picture });
-    } else if (!user.googleId) {
-      user.googleId = sub; 
-      user.profileImage = picture || user.profileImage; 
-      await user.save();
+    // Accept either "credential" or "token" from the frontend
+    const idToken = req.body.credential || req.body.token;
+
+    if (!idToken) {
+      return res.status(400).json({
+        message: 'Google credential is required'
+      });
     }
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: user._id, name: user.name, email: user.email, profileImage: user.profileImage } });
-  } catch (e) { res.status(400).json({ message: 'Invalid Google token' }); }
+
+    // Verify the Google ID token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: idToken,
+      audience: GOOGLE_CLIENT_ID
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload) {
+      return res.status(401).json({
+        message: 'Invalid Google token payload'
+      });
+    }
+
+    const {
+      sub,
+      email,
+      name,
+      picture,
+      email_verified
+    } = payload;
+
+    if (!email || !email_verified) {
+      return res.status(401).json({
+        message: 'Google account email is not verified'
+      });
+    }
+
+    // Find the user by email
+    let user = await User.findOne({ email });
+
+    // Create a new user if the user does not exist
+    if (!user) {
+      user = await User.create({
+        name: name || 'Google User',
+        email,
+        googleId: sub,
+        profileImage: picture || ''
+      });
+    } else {
+      // Update Google information if necessary
+      let changed = false;
+
+      if (!user.googleId) {
+        user.googleId = sub;
+        changed = true;
+      }
+
+      if (picture && !user.profileImage) {
+        user.profileImage = picture;
+        changed = true;
+      }
+
+      if (changed) {
+        await user.save();
+      }
+    }
+
+    // Create your application's JWT token
+    const token = jwt.sign(
+      {
+        id: user._id.toString(),
+        email: user.email
+      },
+      JWT_SECRET,
+      {
+        expiresIn: '7d'
+      }
+    );
+
+    return res.status(200).json({
+      message: 'Google login successful',
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        profileImage: user.profileImage
+      }
+    });
+
+  } catch (error) {
+    // IMPORTANT: This shows the real Google error in your terminal
+    console.error('Google token verification error:', error.message);
+    console.error(error);
+
+    return res.status(401).json({
+      message: 'Invalid Google token',
+      error: error.message
+    });
+  }
 });
 
 // --- POST ROUTES ---
