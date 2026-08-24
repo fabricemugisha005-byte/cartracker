@@ -6,8 +6,8 @@ import { Menu, User, LogOut, Home, PenLine, ArrowLeft, MessageCircle, Trash2, Ed
 
 // --- CONFIGURATION ---
 // Smart fallback: uses environment variable in production, localhost in development
-const API_URL = import.meta.env.VITE_API_URL || process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-const GOOGLE_CLIENT_ID = '505107838201-19u5tmj64hkj55pgcufc2ulqf0vuhtj5.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
+const API_URL =process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const GOOGLE_CLIENT_ID = '472201379054-8cv9lm1652m5vf3ed37oo26vkmrrau1m.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
 
 const api = axios.create({ baseURL: API_URL });
 // Bulletproof Token Interceptor
