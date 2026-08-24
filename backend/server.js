@@ -1,3 +1,5 @@
+require('dotenv').config(); // MUST BE AT THE VERY TOP
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -10,13 +12,15 @@ app.use(cors());
 app.use(express.json());
 
 // --- CONFIGURATION ---
-const JWT_SECRET = 'mindshare_super_secret_key_2024'; // ⚠️ DO NOT CHANGE THIS AFTER LOGGING IN
-const GOOGLE_CLIENT_ID = '505107838201-19u5tmj64hkj55pgcufc2ulqf0vuhtj5.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
+const JWT_SECRET = process.env.JWT_SECRET || 'mindshare_super_secret_key_2024';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// Connect to MongoDB
-mongoose.connect('mongodb://127.0.0.1:27017/mindshare')
-  .then(() => console.log('✅ MongoDB Connected Successfully'))
+// Connect to MongoDB (Smart fallback: uses .env if available, otherwise local)
+const dbUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/mindshare';
+
+mongoose.connect(dbUri)
+  .then(() => console.log('✅ MongoDB Connected Successfully to:', dbUri.includes('127.0.0.1') ? 'Local' : 'Atlas Cloud'))
   .catch(err => console.error('MongoDB connection error:', err));
 
 // --- DATABASE MODELS ---
@@ -49,7 +53,7 @@ const Post = mongoose.model('Post', new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
-// --- AUTH MIDDLEWARE (Fixes 401 Errors) ---
+// --- AUTH MIDDLEWARE ---
 const auth = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -137,7 +141,7 @@ app.delete('/api/posts/:id', auth, async (req, res) => {
   if (!post) return res.status(404).json({ message: 'Post not found' });
   if (post.userId.toString() !== req.user.id) return res.status(403).json({ message: 'Unauthorized' });
   await Post.findByIdAndDelete(req.params.id);
-  await Comment.deleteMany({ postId: req.params.id }); // Clean up comments
+  await Comment.deleteMany({ postId: req.params.id }); 
   res.json({ message: 'Post deleted successfully' });
 });
 

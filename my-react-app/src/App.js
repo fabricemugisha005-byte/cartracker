@@ -5,7 +5,9 @@ import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 import { Menu, User, LogOut, Home, PenLine, ArrowLeft, MessageCircle, Trash2, Edit3, Save, X } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_URL = 'http://localhost:5000/api';
+
+// Replace the hardcoded API_URL with this dynamic one:
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 const GOOGLE_CLIENT_ID = '505107838201-19u5tmj64hkj55pgcufc2ulqf0vuhtj5.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
 
 const api = axios.create({ baseURL: API_URL });
