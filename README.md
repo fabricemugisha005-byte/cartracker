@@ -1,4 +1,4 @@
-# 🧠 MindShare
+#  MindShare
 
 A modern social discussion platform where users can share ideas, comment on posts, and engage in meaningful conversations.
 

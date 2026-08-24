@@ -5,9 +5,8 @@ import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 import { Menu, User, LogOut, Home, PenLine, ArrowLeft, MessageCircle, Trash2, Edit3, Save, X } from 'lucide-react';
 
 // --- CONFIGURATION ---
-
-// Replace the hardcoded API_URL with this dynamic one:
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+// Smart fallback: uses environment variable in production, localhost in development
+const API_URL = import.meta.env.VITE_API_URL || process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 const GOOGLE_CLIENT_ID = '505107838201-19u5tmj64hkj55pgcufc2ulqf0vuhtj5.apps.googleusercontent.com'; // ⚠️ REPLACE THIS
 
 const api = axios.create({ baseURL: API_URL });
@@ -62,7 +61,7 @@ const Navbar = ({ toggleMenu, toggleProfile }) => {
       <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button onClick={toggleMenu} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600"><Menu size={24} /></button>
-          <log className="text-xl font-bold text-indigo-600 flex items-center gap-2"> MindShare</log>
+          <logo className="text-xl font-bold text-indigo-600 flex items-center gap-2">MindShare</logo>
         </div>
         <button onClick={toggleProfile} className="flex items-center gap-2 p-1 pr-3 hover:bg-slate-100 rounded-full border border-transparent hover:border-slate-200 transition">
           <img src={user?.profileImage || `https://ui-avatars.com/api/?name=${user?.name}`} alt="Profile" className="w-8 h-8 rounded-full" />
@@ -135,7 +134,10 @@ const Login = () => {
     try {
       const response = await api.post('/auth/google', { credential: res.credential });
       login(response.data.user, response.data.token);
-    } catch { setError('Google login failed'); }
+    } catch (err) { 
+      console.error("Google Login Error Details:", err.response?.data);
+      setError(err.response?.data?.message || 'Google login failed'); 
+    }
   };
 
   return (
@@ -153,7 +155,14 @@ const Login = () => {
           <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition">Sign In</button>
         </form>
         <div className="relative my-6"><div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div><div className="relative flex justify-center text-sm"><span className="px-2 bg-white text-slate-500">OR</span></div></div>
-        <div className="flex justify-center mb-6"><GoogleLogin onSuccess={handleGoogle} onError={() => setError('Google login failed')} width="300" /></div>
+        <div className="flex justify-center mb-6">
+          <GoogleLogin 
+            onSuccess={handleGoogle} 
+            onError={() => setError('Google login failed')} 
+            width="300" 
+            locale="en" 
+          />
+        </div>
         <p className="text-center text-sm text-slate-600">Don't have an account? <Link to="/register" className="text-indigo-600 font-semibold hover:underline">Create account</Link></p>
       </div>
     </div>
@@ -181,7 +190,10 @@ const Register = () => {
     try {
       const response = await api.post('/auth/google', { credential: res.credential });
       login(response.data.user, response.data.token);
-    } catch { setError('Google login failed'); }
+    } catch (err) { 
+      console.error("Google Register Error Details:", err.response?.data);
+      setError(err.response?.data?.message || 'Google login failed'); 
+    }
   };
 
   return (
@@ -197,7 +209,14 @@ const Register = () => {
           <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition">Create Account</button>
         </form>
         <div className="relative my-6"><div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div><div className="relative flex justify-center text-sm"><span className="px-2 bg-white text-slate-500">OR</span></div></div>
-        <div className="flex justify-center mb-6"><GoogleLogin onSuccess={handleGoogle} onError={() => setError('Google login failed')} width="300" /></div>
+        <div className="flex justify-center mb-6">
+          <GoogleLogin 
+            onSuccess={handleGoogle} 
+            onError={() => setError('Google login failed')} 
+            width="300" 
+            locale="en" 
+          />
+        </div>
         <p className="text-center text-sm text-slate-600">Already have an account? <Link to="/login" className="text-indigo-600 font-semibold hover:underline">Sign In</Link></p>
       </div>
     </div>
@@ -272,8 +291,8 @@ const Dashboard = () => {
 
   return (
     <div className="max-w-2xl mx-auto p-4">
-      <h2 className="text-xl font-bold text-slate-900 mb-1">SEE SHARED ACTIVITY</h2>
-      <p className="text-slate-500 mb-6">Stay updated with recent posts, comments and interactions from your community</p>
+      <h2 className="text-xl font-bold text-slate-900 mb-1">SEE WHAT'S TRENDING</h2>
+      <p className="text-slate-500 mb-6">Catch up on popular discussions and the latest activity happening in your community</p>
       {posts.length === 0 ? <p className="text-center text-slate-500 py-10">No posts yet. Be the first to share!</p> : posts.map(p => <PostCard key={p._id} post={p} onUpdate={updatePost} />)}
     </div>
   );
