@@ -3,7 +3,10 @@ import { BrowserRouter, Routes, Route, Link, useNavigate, useParams, useLocation
 import axios from 'axios';
 import './index.css';
 
-const API = axios.create({ baseURL: 'http://localhost:5000/api', withCredentials: true });
+const API = axios.create({ 
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api', 
+  withCredentials: true 
+});
 
 // --- UTILS ---
 const getInitials = (name) => {
