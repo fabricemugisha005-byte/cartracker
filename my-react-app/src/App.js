@@ -231,7 +231,7 @@ const UserLayout = ({ children }) => {
       <aside className={`fixed lg:static inset-y-0 left-0 z-40 w-64 bg-white dark:bg-zinc-900 border-r border-gray-200 dark:border-zinc-800 flex flex-col transform transition-transform duration-300 lg:transform-none ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="p-5 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => { navigate('/dashboard'); setIsMobileMenuOpen(false); }}>
-            <img src="/logo.png" alt="MindShare Logo" className="w-9 h-9 rounded-lg shadow-md object-cover" />
+            <div className="w-9 h-9 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-md">M</div>
             <span className="text-xl font-bold text-gray-900 dark:text-zinc-100">MindShare</span>
           </div>
           <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden p-1 text-gray-500"><X size={20} /></button>
