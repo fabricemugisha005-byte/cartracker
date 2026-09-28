@@ -1,31 +1,7 @@
-# Dependencies
 node_modules/
-*/node_modules/
-
-# Environment files
 .env
 .env.local
-*/.env
-*/.env.local
-
-# Logs
-*.log
-npm-debug.log*
-logs/
-
-# OS files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Build
 build/
 dist/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# Temporary
-*.tmp
+.DS_Store
+npm-debug.log*
