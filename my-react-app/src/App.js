@@ -11,7 +11,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000';
-const PUB = (typeof process !== 'undefined' && process.env && process.env.PUBLIC_URL) ? process.env.PUBLIC_URL : '';
 const BLUE = '#2563eb';
 
 /* Design tokens */
@@ -2748,6 +2747,7 @@ function SidebarInner({ nav, path, onClose }) {
     </div>
   );
 }
+
 function Shell() {
   const hash = useRoute();
   const { path, params } = parseHash(hash);
@@ -2784,7 +2784,7 @@ function Shell() {
 
   const isAdmin = user.role === 'ADMIN';
   const isDriver = user.role === 'DRIVER';
-  let nav; let bottom;
+    let nav;
 
   if (isAdmin) {
     nav = [
@@ -2795,7 +2795,7 @@ function Shell() {
       ['/admin/reports', 'chart', 'Reports'], ['/admin/gps-history', 'clock', 'GPS History'],
       ['/admin/audit-logs', 'file', 'Audit Logs'], ['/admin/settings', 'settings', 'Settings'],
     ];
-    bottom = ['Smart Transport', 'Better City', 'Monitor, manage and keep your fleet running smoothly with CarTracker.'];
+    
   } else if (isDriver) {
     nav = [
       ['/driver/dashboard', 'home', 'Dashboard'],
@@ -2805,7 +2805,7 @@ function Shell() {
       ['/driver/profile', 'user', 'Profile'],
       ['/driver/settings', 'settings', 'Settings'],
     ];
-    bottom = ['Drive Safe!', '', 'Your updates help keep passengers informed and the city moving.'];
+    
   } else {
     nav = [
       ['/', 'home', 'Home'], ['/live-map', 'map', 'Live Map'],
@@ -2813,7 +2813,7 @@ function Shell() {
       ['/bus-stops', 'pin', 'Bus Stops'], ['/my-trips', 'clock', 'My Trips'],
       ['/notifications', 'bell', 'Notifications'], ['/settings', 'settings', 'Settings'],
     ];
-    bottom = ['Track your ride,', 'reach on time!', 'CarTracker keeps you connected with real-time bus locations and arrival times.'];
+    
   }
 
   let page;
@@ -2864,12 +2864,12 @@ function Shell() {
   return (
     <div className="min-h-screen bg-slate-100">
       <aside className="hidden lg:block fixed inset-y-0 left-0 z-[800]">
-        <SidebarInner nav={nav} bottom={bottom} path={path} onClose={() => setMenuOpen(false)} />
+        <SidebarInner nav={nav} path={path} onClose={() => setMenuOpen(false)} />
       </aside>
       {menuOpen && (
         <div className="lg:hidden fixed inset-0 z-[1000]">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setMenuOpen(false)} />
-          <div className="absolute inset-y-0 left-0"><SidebarInner nav={nav} bottom={bottom} path={path} onClose={() => setMenuOpen(false)} /></div>
+          <div className="absolute inset-y-0 left-0"><SidebarInner nav={nav} path={path} onClose={() => setMenuOpen(false)} /></div>
         </div>
       )}
       <div className="lg:pl-64 flex flex-col min-h-screen">
