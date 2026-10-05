@@ -1,16 +1,15 @@
 /**
- * CarTracker — Backend (SINGLE FILE) — FULL & FIXED
- * Fixes: duplicate 'driver' declaration, GeoJSON index, CastError, 500s
- * Features: vehicle GPS, person location sharing, track ANY phone,
- *           driver vs person icons, geofence notifications, Socket.IO rooms
+ * CarTracker — Backend (SINGLE FILE) — FULL & FINAL
+ * Real GPS + Person location sharing + Google OAuth + Socket.IO + MongoDB
+ * Google credentials are read from environment variables (.env / Render).
  */
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
 const crypto = require('crypto');
-const fs = require('fs'); // <--- ADD THIS LINE
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -40,12 +39,8 @@ const userSchema = new mongoose.Schema({
   active: { type: Boolean, default: true },
   lastLogin: { type: Date, default: null },
   resetToken: String, resetExpires: Date, googleId: String,
-  // Location sharing (for ANY user, not just drivers)
   locationSharing: { type: Boolean, default: false },
-  currentLocation: {
-    type: { type: String, enum: ['Point'] },
-    coordinates: { type: [Number] }
-  },
+  currentLocation: { type: { type: String, enum: ['Point'] }, coordinates: { type: [Number] } },
   lastLocationUpdate: { type: Date, default: null },
 }, { timestamps: true });
 userSchema.index({ currentLocation: '2dsphere' });
@@ -77,10 +72,7 @@ const vehicleSchema = new mongoose.Schema({
   driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   routeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Route', default: null },
   status: { type: String, enum: ['LIVE', 'GPS_DELAYED', 'OFFLINE', 'TRACKING_STOPPED', 'IN_SERVICE'], default: 'OFFLINE' },
-  currentLocation: {
-    type: { type: String, enum: ['Point'] },
-    coordinates: { type: [Number] }
-  },
+  currentLocation: { type: { type: String, enum: ['Point'] }, coordinates: { type: [Number] } },
   speed: { type: Number, default: 0 }, heading: { type: Number, default: 0 }, accuracy: { type: Number, default: null },
   lastUpdated: { type: Date, default: null },
   progressIndex: { type: Number, default: 0 },
@@ -126,19 +118,14 @@ const trackingSessionSchema = new mongoose.Schema({
   notificationState: {
     n10: { type: Boolean, default: false }, n5: Boolean, n2: Boolean,
     d1500: { type: Boolean, default: false }, d800: Boolean, d300: Boolean, arrived: Boolean,
-    insideZone: { type: Boolean, default: false },
-    lastZoneCheck: { type: Date, default: null },
+    insideZone: { type: Boolean, default: false }, lastZoneCheck: { type: Date, default: null },
   },
 }, { timestamps: true });
 
-/* NEW: PersonLocation for unregistered people sharing location */
 const personLocationSchema = new mongoose.Schema({
   phone: { type: String, required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  currentLocation: {
-    type: { type: String, enum: ['Point'] },
-    coordinates: { type: [Number] }
-  },
+  currentLocation: { type: { type: String, enum: ['Point'] }, coordinates: { type: [Number] } },
   isSharing: { type: Boolean, default: false },
   lastUpdate: { type: Date, default: Date.now },
   userAgent: { type: String, default: '' },
@@ -284,7 +271,6 @@ async function checkPassengerNotifications(vehicle, lat, lng, eta) {
 
     const wasInside = ns.insideZone;
     const isInside = dM <= radius;
-
     if (isInside && !wasInside) {
       ns.insideZone = true; ns.arrived = true;
       ns.n10 = ns.n5 = ns.n2 = ns.d1500 = ns.d800 = ns.d300 = true;
@@ -299,14 +285,12 @@ async function checkPassengerNotifications(vehicle, lat, lng, eta) {
       if (!ns.n2 && etaMin <= t2) { ns.n10 = ns.n5 = ns.n2 = true; fired.push(['WARNING', `${vehicle.vehicleNumber} is almost at ${stop.name}.`, etaMin, dKm]); }
       else if (!ns.n5 && etaMin <= t5) { ns.n10 = ns.n5 = true; fired.push(['INFO', `${vehicle.vehicleNumber} will reach ${stop.name} in approximately ${etaMin} minutes.`, etaMin, dKm]); }
       else if (!ns.n10 && etaMin <= t10) { ns.n10 = true; fired.push(['INFO', `${vehicle.vehicleNumber} is approaching ${stop.name}.`, etaMin, dKm]); }
-
       if (fired.length === 0) {
         if (!ns.d300 && dM <= m300) { ns.d1500 = ns.d800 = ns.d300 = true; fired.push(['WARNING', `${vehicle.vehicleNumber} is almost here — about ${Math.round(dM)} m from ${stop.name}.`, etaMin, dKm]); }
         else if (!ns.d800 && dM <= m800) { ns.d1500 = ns.d800 = true; fired.push(['INFO', `${vehicle.vehicleNumber} is coming soon — about ${Math.round(dM)} m away.`, etaMin, dKm]); }
         else if (!ns.d1500 && dM <= m1500) { ns.d1500 = true; fired.push(['INFO', `${vehicle.vehicleNumber} is approaching — about ${(dKm).toFixed(1)} km away.`, etaMin, dKm]); }
       }
     }
-
     for (const f of fired) await notifyUser(sess.passengerId, f[0] === 'SUCCESS' ? 'Bus Alert' : 'Bus approaching', f[1], f[0], { vehicleId: vehicle._id, stopId: stop._id, eta: f[2], distance: +f[3].toFixed(2) });
     if (fired.length || wasInside !== isInside) await sess.save();
   }
@@ -375,18 +359,11 @@ io.on('connection', (socket) => {
   if (u.role === 'DRIVER') Vehicle.findOne({ driverId: u.id }).then((v) => { if (v) socket.join('vehicle:' + v._id.toString()); }).catch(() => {});
   socket.on('track:vehicle', (id) => socket.join('vehicle:' + id));
   socket.on('untrack:vehicle', (id) => socket.leave('vehicle:' + id));
-  // NEW: person tracking rooms
-  socket.on('track:person', (phone) => {
-    const cleanPhone = String(phone).replace(/\D/g, '');
-    if (cleanPhone) socket.join('track:' + cleanPhone);
-  });
-  socket.on('untrack:person', (phone) => {
-    const cleanPhone = String(phone).replace(/\D/g, '');
-    if (cleanPhone) socket.leave('track:' + cleanPhone);
-  });
+  socket.on('track:person', (phone) => { const c = String(phone).replace(/\D/g, ''); if (c) socket.join('track:' + c); });
+  socket.on('untrack:person', (phone) => { const c = String(phone).replace(/\D/g, ''); if (c) socket.leave('track:' + c); });
 });
 
-/* Offline / delayed sweep for vehicles */
+/* Vehicle offline sweep */
 setInterval(async () => {
   try {
     const s = await getSettings(); const now = Date.now();
@@ -398,22 +375,14 @@ setInterval(async () => {
   } catch { /* db not ready */ }
 }, 10000);
 
-/* NEW: cleanup stale person locations (every 30s) */
+/* Person location cleanup sweep */
 setInterval(async () => {
   try {
-    const staleThreshold = new Date(Date.now() - 2 * 60 * 1000);
-    const staleUsers = await User.find({ locationSharing: true, lastLocationUpdate: { $lt: staleThreshold } });
-    for (const user of staleUsers) {
-      user.locationSharing = false;
-      await user.save();
-      io.to('track:' + String(user.phone).replace(/\D/g, '')).emit('person:offline', { userId: user._id, phone: user.phone });
-    }
-    const stalePersons = await PersonLocation.find({ isSharing: true, lastUpdate: { $lt: staleThreshold } });
-    for (const person of stalePersons) {
-      person.isSharing = false;
-      await person.save();
-      io.to('track:' + String(person.phone).replace(/\D/g, '')).emit('person:offline', { phone: person.phone });
-    }
+    const stale = new Date(Date.now() - 2 * 60 * 1000);
+    const staleUsers = await User.find({ locationSharing: true, lastLocationUpdate: { $lt: stale } });
+    for (const u of staleUsers) { u.locationSharing = false; await u.save(); io.to('track:' + String(u.phone).replace(/\D/g, '')).emit('person:offline', { userId: u._id, phone: u.phone }); }
+    const stalePersons = await PersonLocation.find({ isSharing: true, lastUpdate: { $lt: stale } });
+    for (const p of stalePersons) { p.isSharing = false; await p.save(); io.to('track:' + String(p.phone).replace(/\D/g, '')).emit('person:offline', { phone: p.phone }); }
     if (staleUsers.length || stalePersons.length) console.log('[cleanup] offline:', staleUsers.length, 'users,', stalePersons.length, 'persons');
   } catch (e) { console.error('[cleanup]', e.message); }
 }, 30000);
@@ -476,6 +445,7 @@ app.post('/api/auth/reset-password', rateLimit(), aw(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------- GOOGLE OAUTH (reads GOOGLE_CLIENT_ID / SECRET from env) ---------- */
 app.get('/api/auth/google/url', (req, res) => {
   const cid = process.env.GOOGLE_CLIENT_ID;
   if (!cid) return res.status(501).json({ error: 'Google login is not configured. Set GOOGLE_CLIENT_ID in the server .env file.' });
@@ -485,7 +455,11 @@ app.get('/api/auth/google/url', (req, res) => {
 app.get('/api/auth/google/callback', aw(async (req, res) => {
   const cid = process.env.GOOGLE_CLIENT_ID, secret = process.env.GOOGLE_CLIENT_SECRET;
   const ru = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback';
-  const tr = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code: req.query.code, client_id: cid, client_secret: secret || '', redirect_uri: ru, grant_type: 'authorization_code' }) });
+  if (!cid || !secret) return res.status(501).json({ error: 'Google login is not configured on the server.' });
+  const tr = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code: req.query.code, client_id: cid, client_secret: secret, redirect_uri: ru, grant_type: 'authorization_code' }),
+  });
   const tj = await tr.json();
   if (!tj.id_token) return res.status(400).json({ error: 'Google authentication failed.' });
   const info = await (await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + tj.id_token)).json();
@@ -493,6 +467,7 @@ app.get('/api/auth/google/callback', aw(async (req, res) => {
   let user = await User.findOne({ $or: [{ googleId: info.sub }, { email: info.email }] });
   if (!user) user = await User.create({ name: info.name || info.email, email: info.email, googleId: info.sub, passwordHash: await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 10), role: 'PASSENGER' });
   user.lastLogin = new Date(); await user.save();
+  await auditSystem('LOGIN', 'user', user._id, user.email + ' signed in with Google', 'AUTH', user.name);
   const client = process.env.CLIENT_URL || 'http://localhost:3000';
   res.redirect(client + '/#/google-callback?token=' + signToken(user));
 }));
@@ -555,36 +530,21 @@ app.get('/api/vehicles/nearby', auth, aw(async (req, res) => {
   res.json(out);
 }));
 
-/* Driver phone lookup (returns driver + their vehicle) */
 app.get('/api/drivers/phone/:phone', auth, aw(async (req, res) => {
-  const rawPhone = String(req.params.phone).trim();
-  const phoneDigits = rawPhone.replace(/\D/g, '');
+  const phoneDigits = String(req.params.phone).trim().replace(/\D/g, '');
   if (!phoneDigits) return res.status(400).json({ error: 'Phone number required' });
-
-  let driver = await User.findOne({
-    phone: new RegExp('^' + phoneDigits.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
-    role: 'DRIVER'
-  }).select('name phone licenseNumber active');
-
-  if (!driver) {
-    driver = await User.findOne({
-      phone: new RegExp(phoneDigits.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-      role: 'DRIVER'
-    }).select('name phone licenseNumber active');
-  }
+  let driver = await User.findOne({ phone: new RegExp('^' + phoneDigits.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), role: 'DRIVER' }).select('name phone licenseNumber active');
+  if (!driver) driver = await User.findOne({ phone: new RegExp(phoneDigits.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), role: 'DRIVER' }).select('name phone licenseNumber active');
   if (!driver) return res.status(404).json({ error: 'Driver not found', message: 'No driver registered with that phone number.' });
-
   const vehicle = await Vehicle.findOne({ driverId: driver._id }).populate(vehiclePop);
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found', message: 'Driver found but no vehicle assigned.' });
-
   res.json({
     driver: { _id: driver._id, name: driver.name, phone: driver.phone, licenseNumber: driver.licenseNumber },
     vehicle: await vehicleJson(vehicle),
-    eta: await computeEtaInfo(vehicle)
+    eta: await computeEtaInfo(vehicle),
   });
 }));
 
-/* DEV simulator */
 app.post('/api/admin/simulate/:id', auth, role('ADMIN'), aw(async (req, res) => {
   if (!IS_DEV) return res.status(403).json({ error: 'Simulator is only available in development mode.' });
   const v = await Vehicle.findById(req.params.id);
@@ -672,22 +632,19 @@ app.get('/api/vehicles/:id/history', auth, aw(async (req, res) => {
   res.json(await GPSHistory.find({ vehicleId: req.params.id }).sort({ timestamp: -1 }).limit(limit));
 }));
 
-/* ============ NEW: PERSON LOCATION SHARING (ALL USERS) ============ */
+/* ============ PERSON LOCATION SHARING (ALL USERS) ============ */
 app.post('/api/location/start', auth, aw(async (req, res) => {
   const user = await User.findById(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   if (!user.phone) return res.status(400).json({ error: 'Add a phone number to your profile before sharing location.' });
-
   user.locationSharing = true;
   user.lastLocationUpdate = new Date();
   await user.save();
-
   await PersonLocation.findOneAndUpdate(
     { phone: user.phone },
     { phone: user.phone, userId: user._id, isSharing: true, lastUpdate: new Date(), userAgent: req.headers['user-agent'] || '' },
     { upsert: true, new: true }
   );
-
   io.to('user:' + user._id.toString()).emit('location:started', { userId: user._id, phone: user.phone });
   await auditSystem('LOCATION_START', 'user', user._id, user.name + ' started sharing location', 'SYSTEM', user.name);
   res.json({ ok: true, message: 'Location sharing started', userId: user._id, phone: user.phone, role: user.role });
@@ -695,36 +652,24 @@ app.post('/api/location/start', auth, aw(async (req, res) => {
 
 app.post('/api/location/update', auth, aw(async (req, res) => {
   const { latitude, longitude, accuracy, speed, heading } = req.body;
-  if (!isNum(+latitude) || !isNum(+longitude) || Math.abs(+latitude) > 90 || Math.abs(+longitude) > 180) {
-    return res.status(400).json({ error: 'Invalid coordinates' });
-  }
+  if (!isNum(+latitude) || !isNum(+longitude) || Math.abs(+latitude) > 90 || Math.abs(+longitude) > 180) return res.status(400).json({ error: 'Invalid coordinates' });
   const user = await User.findById(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found.' });
-
   user.currentLocation = { type: 'Point', coordinates: [+longitude, +latitude] };
   user.lastLocationUpdate = new Date();
   user.locationSharing = true;
   await user.save();
-
   await PersonLocation.findOneAndUpdate(
     { phone: user.phone },
     { currentLocation: { type: 'Point', coordinates: [+longitude, +latitude] }, isSharing: true, lastUpdate: new Date() },
     { upsert: true }
   );
-
   if (IS_DEV) console.log('[location]', user.name, user.role, (+latitude).toFixed(5), (+longitude).toFixed(5));
-
-  const payload = {
-    userId: user._id.toString(),
-    phone: user.phone,
-    name: user.name,
-    role: user.role,
-    latitude: +latitude, longitude: +longitude,
-    accuracy: accuracy || null, speed: speed || 0, heading: heading || 0,
-    lastUpdate: new Date().toISOString(),
-    isDriver: user.role === 'DRIVER'
-  };
-  io.to('track:' + String(user.phone).replace(/\D/g, '')).emit('person:location', payload);
+  io.to('track:' + String(user.phone).replace(/\D/g, '')).emit('person:location', {
+    userId: user._id.toString(), phone: user.phone, name: user.name, role: user.role,
+    latitude: +latitude, longitude: +longitude, accuracy: accuracy || null, speed: speed || 0, heading: heading || 0,
+    lastUpdate: new Date().toISOString(), isDriver: user.role === 'DRIVER',
+  });
   res.json({ ok: true });
 }));
 
@@ -740,64 +685,41 @@ app.post('/api/location/stop', auth, aw(async (req, res) => {
   res.json({ ok: true, message: 'Location sharing stopped' });
 }));
 
-/* ============ NEW: TRACK ANY PHONE NUMBER ============ */
+/* Track ANY phone number */
 app.get('/api/track/:phone', auth, aw(async (req, res) => {
   const phone = String(req.params.phone).trim().replace(/\D/g, '');
   if (!phone) return res.status(400).json({ error: 'Phone number required' });
-
-  // 1) Registered user (driver OR normal user)
-  const foundUser = await User.findOne({
-    phone: new RegExp('^' + phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
-    active: true
-  }).select('name phone role locationSharing currentLocation lastLocationUpdate avatar');
-
+  const foundUser = await User.findOne({ phone: new RegExp('^' + phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), active: true })
+    .select('name phone role locationSharing currentLocation lastLocationUpdate avatar');
   if (foundUser) {
-    const isSharing = !!(foundUser.locationSharing && foundUser.lastLocationUpdate &&
-      (Date.now() - new Date(foundUser.lastLocationUpdate).getTime() < 120000));
+    const isSharing = !!(foundUser.locationSharing && foundUser.lastLocationUpdate && (Date.now() - new Date(foundUser.lastLocationUpdate).getTime() < 120000));
     return res.json({
-      found: true,
-      type: 'registered',
-      isDriver: foundUser.role === 'DRIVER',
+      found: true, type: 'registered', isDriver: foundUser.role === 'DRIVER',
       user: { _id: foundUser._id, name: foundUser.name, phone: foundUser.phone, role: foundUser.role, avatar: foundUser.avatar },
-      location: isSharing ? {
-        latitude: foundUser.currentLocation && foundUser.currentLocation.coordinates ? foundUser.currentLocation.coordinates[1] : null,
-        longitude: foundUser.currentLocation && foundUser.currentLocation.coordinates ? foundUser.currentLocation.coordinates[0] : null,
-        lastUpdate: foundUser.lastLocationUpdate,
-        isSharing: true
-      } : { isSharing: false, message: 'This person is not currently sharing their location.' }
+      location: isSharing
+        ? { latitude: foundUser.currentLocation && foundUser.currentLocation.coordinates ? foundUser.currentLocation.coordinates[1] : null, longitude: foundUser.currentLocation && foundUser.currentLocation.coordinates ? foundUser.currentLocation.coordinates[0] : null, lastUpdate: foundUser.lastLocationUpdate, isSharing: true }
+        : { isSharing: false, message: 'This person is not currently sharing their location.' },
     });
   }
-
-  // 2) Unregistered person actively sharing
   const personLoc = await PersonLocation.findOne({ phone });
   if (personLoc && personLoc.isSharing) {
     const isRecent = (Date.now() - new Date(personLoc.lastUpdate).getTime() < 120000);
     return res.json({
-      found: true,
-      type: 'unregistered',
-      isDriver: false,
-      location: isRecent ? {
-        latitude: personLoc.currentLocation && personLoc.currentLocation.coordinates ? personLoc.currentLocation.coordinates[1] : null,
-        longitude: personLoc.currentLocation && personLoc.currentLocation.coordinates ? personLoc.currentLocation.coordinates[0] : null,
-        lastUpdate: personLoc.lastUpdate,
-        isSharing: true
-      } : { isSharing: false, message: 'Location data is stale.' }
+      found: true, type: 'unregistered', isDriver: false,
+      location: isRecent
+        ? { latitude: personLoc.currentLocation && personLoc.currentLocation.coordinates ? personLoc.currentLocation.coordinates[1] : null, longitude: personLoc.currentLocation && personLoc.currentLocation.coordinates ? personLoc.currentLocation.coordinates[0] : null, lastUpdate: personLoc.lastUpdate, isSharing: true }
+        : { isSharing: false, message: 'Location data is stale.' },
     });
   }
-
-  // 3) Not found / not sharing
   res.json({ found: false, message: 'This phone number is not currently sharing location.' });
 }));
 
-/* Unregistered person start sharing (temporary session) */
 app.post('/api/track/unregistered/start', aw(async (req, res) => {
   const { phone } = req.body;
   const cleanPhone = String(phone || '').trim().replace(/\D/g, '');
   if (!cleanPhone) return res.status(400).json({ error: 'Phone number required' });
-
   const existingUser = await User.findOne({ phone: cleanPhone });
   if (existingUser) return res.status(400).json({ error: 'This phone is already registered. Please log in to share location.' });
-
   const personLoc = await PersonLocation.findOneAndUpdate(
     { phone: cleanPhone },
     { phone: cleanPhone, userId: null, isSharing: true, lastUpdate: new Date(), userAgent: req.headers['user-agent'] || '' },
@@ -811,21 +733,17 @@ app.post('/api/track/unregistered/update', aw(async (req, res) => {
   const { phone, latitude, longitude, accuracy, speed, heading } = req.body;
   const cleanPhone = String(phone || '').trim().replace(/\D/g, '');
   if (!cleanPhone || !isNum(+latitude) || !isNum(+longitude)) return res.status(400).json({ error: 'Invalid data' });
-
   await PersonLocation.findOneAndUpdate(
     { phone: cleanPhone },
     { currentLocation: { type: 'Point', coordinates: [+longitude, +latitude] }, isSharing: true, lastUpdate: new Date() },
     { upsert: true, new: true }
   );
   if (IS_DEV) console.log('[location-unregistered]', cleanPhone, (+latitude).toFixed(5), (+longitude).toFixed(5));
-
-  const payload = {
+  io.to('track:' + cleanPhone).emit('person:location', {
     phone: cleanPhone, name: 'Person', role: 'UNREGISTERED',
-    latitude: +latitude, longitude: +longitude,
-    accuracy: accuracy || null, speed: speed || 0, heading: heading || 0,
-    lastUpdate: new Date().toISOString(), isDriver: false
-  };
-  io.to('track:' + cleanPhone).emit('person:location', payload);
+    latitude: +latitude, longitude: +longitude, accuracy: accuracy || null, speed: speed || 0, heading: heading || 0,
+    lastUpdate: new Date().toISOString(), isDriver: false,
+  });
   res.json({ ok: true });
 }));
 
@@ -936,7 +854,7 @@ app.delete('/api/stops/:id', auth, role('ADMIN'), aw(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ======================= NOTIFICATIONS / TRIPS / SEARCH ======================= */
+/* ======================= NOTIFICATIONS / TRIPS / SEARCH / TRACKING ======================= */
 app.get('/api/notifications', auth, aw(async (req, res) => res.json(await Notification.find(notifFilter(req.user)).sort({ createdAt: -1 }).limit(60))));
 app.get('/api/notifications/unread-count', auth, aw(async (req, res) => res.json({ count: await Notification.countDocuments({ ...notifFilter(req.user), read: false }) })));
 app.patch('/api/notifications/:id/read', auth, aw(async (req, res) => {
@@ -1221,21 +1139,13 @@ app.get('/api/admin/reports', auth, role('ADMIN'), aw(async (req, res) => {
   });
 }));
 
-/* Admin audit logs with filters + stats */
 app.get('/api/admin/audit-logs', auth, role('ADMIN'), aw(async (req, res) => {
   const filter = {};
   if (req.query.category) filter.category = req.query.category;
   if (req.query.action) filter.action = req.query.action;
   if (req.query.userId) filter.userId = req.query.userId;
-  if (req.query.from || req.query.to) {
-    filter.timestamp = {};
-    if (req.query.from) filter.timestamp.$gte = new Date(req.query.from);
-    if (req.query.to) filter.timestamp.$lte = new Date(req.query.to);
-  }
-  if (req.query.q) {
-    const rx = new RegExp(String(req.query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    filter.$or = [{ details: rx }, { userName: rx }, { resource: rx }, { action: rx }];
-  }
+  if (req.query.from || req.query.to) { filter.timestamp = {}; if (req.query.from) filter.timestamp.$gte = new Date(req.query.from); if (req.query.to) filter.timestamp.$lte = new Date(req.query.to); }
+  if (req.query.q) { const rx = new RegExp(String(req.query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); filter.$or = [{ details: rx }, { userName: rx }, { resource: rx }, { action: rx }]; }
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const [total, rows] = await Promise.all([
@@ -1247,12 +1157,9 @@ app.get('/api/admin/audit-logs', auth, role('ADMIN'), aw(async (req, res) => {
 app.get('/api/admin/audit-logs/stats', auth, role('ADMIN'), aw(async (req, res) => {
   const day = new Date(Date.now() - 86400e3);
   const [total, today, authC, security, system, admin] = await Promise.all([
-    AuditLog.countDocuments({}),
-    AuditLog.countDocuments({ timestamp: { $gte: day } }),
-    AuditLog.countDocuments({ category: 'AUTH' }),
-    AuditLog.countDocuments({ category: 'SECURITY' }),
-    AuditLog.countDocuments({ category: 'SYSTEM' }),
-    AuditLog.countDocuments({ category: 'ADMIN' }),
+    AuditLog.countDocuments({}), AuditLog.countDocuments({ timestamp: { $gte: day } }),
+    AuditLog.countDocuments({ category: 'AUTH' }), AuditLog.countDocuments({ category: 'SECURITY' }),
+    AuditLog.countDocuments({ category: 'SYSTEM' }), AuditLog.countDocuments({ category: 'ADMIN' }),
   ]);
   res.json({ total, today, auth: authC, security, system, admin });
 }));
@@ -1268,66 +1175,43 @@ app.put('/api/admin/settings', auth, role('ADMIN'), aw(async (req, res) => {
 }));
 
 /* ============================ STATIC + FALLBACK ============================ */
-/* ============================ STATIC + FALLBACK ============================ */
-// Try to serve static files if they exist
 app.use(express.static(path.join(__dirname, '..', 'client', 'build')));
-
 app.get('*', (req, res) => {
-  // 1. Handle API 404s
-  if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
-    return res.status(404).json({ error: 'API endpoint not found' });
-  }
-  
-  // 2. Check if the frontend build exists
+  if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return res.status(404).json({ error: 'Not found' });
   const indexPath = path.join(__dirname, '..', 'client', 'build', 'index.html');
-  
   if (fs.existsSync(indexPath)) {
-    // If build exists, serve it (Production mode)
     res.sendFile(indexPath);
   } else {
-    // If no build exists, show a helpful dashboard (Development mode)
     res.status(200).send(`
-      <div style="font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; text-align: center; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-        <h1 style="color: #2563eb; margin-bottom: 10px;">🚀 CarTracker API is Online</h1>
-        <p style="color: #475569; font-size: 16px;">The backend server is running correctly on port 5000.</p>
-        <div style="background: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
-           <p style="margin: 0; color: #334155;">Please open the frontend application at:</p>
-           <a href="http://localhost:3000" style="display: block; font-size: 20px; font-weight: bold; color: #1d4ed8; text-decoration: none; margin-top: 8px;">http://localhost:3000</a>
-        </div>
-        <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">
-           (This message appears because the production build folder was not found. This is normal during development.)
-        </p>
+      <div style="font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; text-align: center; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
+        <h1 style="color: #2563eb;">🚀 CarTracker API is Online</h1>
+        <p style="color: #475569;">Backend running on port ${PORT}.</p>
+        <p style="margin-top: 15px;">Open the frontend at: <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}" style="font-weight: bold; color: #1d4ed8;">${process.env.CLIENT_URL || 'http://localhost:3000'}</a></p>
       </div>
     `);
   }
 });
+
 app.use((err, req, res, next) => {
   console.error('[ERROR]', req.method, req.originalUrl, '→', err.message);
-  if (process.env.NODE_ENV !== 'production') console.error(err.stack);
+  if (IS_DEV) console.error(err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Server error' });
 });
 
 /* ========================== DEV SEED ========================== */
 async function seed() {
-  // Always try to fix broken 2dsphere index on startup
   try {
     const indexes = await Vehicle.collection.indexes();
     const geoIdx = indexes.find((idx) => idx.name && idx.name.includes('currentLocation'));
     if (geoIdx) {
-      // Validate by running a test geo query; if it throws, drop & rebuild
-      try {
-        await Vehicle.findOne({ currentLocation: { $near: { $geometry: { type: 'Point', coordinates: [30, -2] }, $maxDistance: 1000 } } });
-      } catch (e) {
-        console.log('[seed] Dropping broken 2dsphere index...');
-        await Vehicle.collection.dropIndex(geoIdx.name);
-      }
+      try { await Vehicle.findOne({ currentLocation: { $near: { $geometry: { type: 'Point', coordinates: [30, -2] }, $maxDistance: 1000 } } }); }
+      catch (e) { console.log('[seed] Dropping broken 2dsphere index...'); await Vehicle.collection.dropIndex(geoIdx.name); }
     }
     await Vehicle.createIndexes();
   } catch (e) { console.error('[seed] index fix:', e.message); }
 
   if (!SEED_DEMO_DATA || (await User.countDocuments()) > 0) return;
   console.log('[seed] Creating DEMO development data (vehicles start OFFLINE — real GPS required)...');
-
   const [passenger, driver, admin] = await User.create([
     { name: 'Mugisha Fabrice', email: 'passenger@demo.com', phone: '0780000001', passwordHash: await bcrypt.hash('demo1234', 10), role: 'PASSENGER' },
     { name: 'Uwase Alice', email: 'driver@demo.com', phone: '0780000002', licenseNumber: 'DL-2214', passwordHash: await bcrypt.hash('demo1234', 10), role: 'DRIVER' },
